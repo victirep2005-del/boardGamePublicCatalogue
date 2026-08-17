@@ -4,17 +4,7 @@ import { Search, SlidersHorizontal, Users, Clock3, X, WifiOff, ArrowLeft, Image 
 import "./styles.css";
 import { supabase } from "./supabase";
 
-type Game = {
-  id: string;
-  name: string;
-  min_players: number | null;
-  max_players: number | null;
-  duration_minutes: number | null;
-  min_age: number | null;
-  difficulty: string;
-  notes: string | null;
-};
-
+type Game = { id: string; name: string; min_players: number | null; max_players: number | null; duration_minutes: number | null; min_age: number | null; difficulty: string; notes: string | null };
 type Filters = { players: string; duration: string; difficulty: string; age: string };
 const CACHE_KEY = "terraludo-public-games-v1";
 const emptyFilters: Filters = { players: "", duration: "", difficulty: "", age: "" };
@@ -40,8 +30,7 @@ async function loadGameById(id: string): Promise<Game | null> {
   } catch {
     const cached = localStorage.getItem(CACHE_KEY);
     if (!cached) return null;
-    const games = JSON.parse(cached) as Game[];
-    return games.find((game) => String(game.id) === String(id)) ?? null;
+    return (JSON.parse(cached) as Game[]).find((game) => String(game.id) === String(id)) ?? null;
   }
 }
 
@@ -56,8 +45,6 @@ function App() {
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [showFilters, setShowFilters] = useState(false);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
-  // The selected game is kept in React state. The hash is only used so the detail view
-  // can survive a browser refresh; navigation itself does not wait for hashchange.
   const [selectedId, setSelectedId] = useState<string | null>(getGameIdFromUrl());
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -85,13 +72,11 @@ function App() {
       setDetailLoading(false);
       return;
     }
-
     let cancelled = false;
     const cachedGame = games.find((game) => String(game.id) === String(selectedId)) ?? null;
     setSelectedGame(cachedGame);
     setDetailLoading(true);
     setDetailError(null);
-
     loadGameById(selectedId).then((game) => {
       if (cancelled) return;
       setSelectedGame(game ?? cachedGame);
@@ -102,28 +87,10 @@ function App() {
       if (!cachedGame) setDetailError("No se pudo cargar la información del juego.");
       setDetailLoading(false);
     });
-
     return () => { cancelled = true; };
   }, [selectedId, games]);
 
-  const openGame = (id: string) => {
-    const encodedId = encodeURIComponent(String(id));
-    setSelectedId(String(id));
-    window.history.pushState({ gameId: String(id) }, "", `${window.location.pathname}${window.location.search}#/game/${encodedId}`);
-  };
-
-  const goHome = () => {
-    setSelectedId(null);
-    setSelectedGame(null);
-    setDetailError(null);
-    setDetailLoading(false);
-    window.history.pushState({}, "", `${window.location.pathname}${window.location.search}`);
-  };
-
-  if (selectedId) {
-    return <GameDetail game={selectedGame} loading={detailLoading} error={detailError} onBack={goHome} />;
-  }
-
+  // IMPORTANT: this hook must run on every render, before the conditional detail return.
   const filteredGames = useMemo(() => {
     const q = query.trim().toLocaleLowerCase();
     const players = filters.players ? Number(filters.players) : null;
@@ -140,6 +107,22 @@ function App() {
   }, [games, query, filters]);
 
   const activeFilters = Object.values(filters).filter(Boolean).length;
+  const openGame = (id: string) => {
+    const encodedId = encodeURIComponent(String(id));
+    setSelectedGame(games.find((game) => String(game.id) === String(id)) ?? null);
+    setSelectedId(String(id));
+    window.history.pushState({ gameId: String(id) }, "", `${window.location.pathname}${window.location.search}#/game/${encodedId}`);
+  };
+  const goHome = () => {
+    setSelectedId(null);
+    setSelectedGame(null);
+    setDetailError(null);
+    setDetailLoading(false);
+    window.history.pushState({}, "", `${window.location.pathname}${window.location.search}`);
+  };
+
+  if (selectedId) return <GameDetail game={selectedGame} loading={detailLoading} error={detailError} onBack={goHome} />;
+
   return (
     <main className="app">
       <div className="hero"><div className="brand">🎲 TerraLudo</div><h1>Catálogo de juegos</h1><p>Encuentra el juego perfecto para tu partida.</p>{isOffline && <div className="offline"><WifiOff size={15} /> Modo sin conexión · usando catálogo guardado</div>}</div>
