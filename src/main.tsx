@@ -34,11 +34,7 @@ async function loadGames(): Promise<Game[]> {
 
 async function loadGameById(id: string): Promise<Game | null> {
   try {
-    const { data, error } = await supabase
-      .from("board_games")
-      .select("id,name,min_players,max_players,duration_minutes,min_age,difficulty,notes")
-      .eq("id", id)
-      .maybeSingle();
+    const { data, error } = await supabase.from("board_games").select("id,name,min_players,max_players,duration_minutes,min_age,difficulty,notes").eq("id", id).maybeSingle();
     if (error) throw error;
     return data as Game | null;
   } catch {
@@ -60,6 +56,8 @@ function App() {
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [showFilters, setShowFilters] = useState(false);
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  // The selected game is kept in React state. The hash is only used so the detail view
+  // can survive a browser refresh; navigation itself does not wait for hashchange.
   const [selectedId, setSelectedId] = useState<string | null>(getGameIdFromUrl());
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -84,30 +82,43 @@ function App() {
     if (!selectedId) {
       setSelectedGame(null);
       setDetailError(null);
+      setDetailLoading(false);
       return;
     }
 
     let cancelled = false;
+    const cachedGame = games.find((game) => String(game.id) === String(selectedId)) ?? null;
+    setSelectedGame(cachedGame);
     setDetailLoading(true);
     setDetailError(null);
-    setSelectedGame(games.find((game) => String(game.id) === String(selectedId)) ?? null);
 
     loadGameById(selectedId).then((game) => {
       if (cancelled) return;
-      setSelectedGame(game);
-      if (!game) setDetailError("No se encontró este juego en la base de datos pública.");
+      setSelectedGame(game ?? cachedGame);
+      if (!game && !cachedGame) setDetailError("No se encontró este juego en la base de datos pública.");
       setDetailLoading(false);
     }).catch(() => {
       if (cancelled) return;
-      setDetailError("No se pudo cargar la información del juego.");
+      if (!cachedGame) setDetailError("No se pudo cargar la información del juego.");
       setDetailLoading(false);
     });
 
     return () => { cancelled = true; };
   }, [selectedId, games]);
 
-  const openGame = (id: string) => { window.location.hash = `/game/${encodeURIComponent(id)}`; };
-  const goHome = () => { window.location.hash = ""; };
+  const openGame = (id: string) => {
+    const encodedId = encodeURIComponent(String(id));
+    setSelectedId(String(id));
+    window.history.pushState({ gameId: String(id) }, "", `${window.location.pathname}${window.location.search}#/game/${encodedId}`);
+  };
+
+  const goHome = () => {
+    setSelectedId(null);
+    setSelectedGame(null);
+    setDetailError(null);
+    setDetailLoading(false);
+    window.history.pushState({}, "", `${window.location.pathname}${window.location.search}`);
+  };
 
   if (selectedId) {
     return <GameDetail game={selectedGame} loading={detailLoading} error={detailError} onBack={goHome} />;
