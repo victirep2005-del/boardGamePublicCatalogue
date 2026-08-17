@@ -20,24 +20,33 @@ const CACHE_KEY = "terraludo-public-games-v1";
 const emptyFilters: Filters = { players: "", duration: "", difficulty: "", age: "" };
 
 async function loadGames(): Promise<Game[]> {
-  const { data, error } = await supabase
-    .from("board_games")
-    .select("id,name,min_players,max_players,duration_minutes,min_age,difficulty,notes")
-    .order("name", { ascending: true });
-  if (error) throw error;
-  const games = (data ?? []) as Game[];
-  localStorage.setItem(CACHE_KEY, JSON.stringify(games));
-  return games;
+  try {
+    const { data, error } = await supabase.from("board_games").select("id,name,min_players,max_players,duration_minutes,min_age,difficulty,notes").order("name", { ascending: true });
+    if (error) throw error;
+    const games = (data ?? []) as Game[];
+    localStorage.setItem(CACHE_KEY, JSON.stringify(games));
+    return games;
+  } catch {
+    const cached = localStorage.getItem(CACHE_KEY);
+    return cached ? JSON.parse(cached) as Game[] : [];
+  }
 }
 
 async function loadGameById(id: string): Promise<Game | null> {
-  const { data, error } = await supabase
-    .from("board_games")
-    .select("id,name,min_players,max_players,duration_minutes,min_age,difficulty,notes")
-    .eq("id", id)
-    .maybeSingle();
-  if (error) throw error;
-  return (data ?? null) as Game | null;
+  try {
+    const { data, error } = await supabase
+      .from("board_games")
+      .select("id,name,min_players,max_players,duration_minutes,min_age,difficulty,notes")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) throw error;
+    return data as Game | null;
+  } catch {
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (!cached) return null;
+    const games = JSON.parse(cached) as Game[];
+    return games.find((game) => String(game.id) === String(id)) ?? null;
+  }
 }
 
 function getGameIdFromUrl() {
@@ -50,29 +59,23 @@ function App() {
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [showFilters, setShowFilters] = useState(false);
-  const [offline, setOffline] = useState(!navigator.onLine);
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [selectedId, setSelectedId] = useState<string | null>(getGameIdFromUrl());
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
   useEffect(() => {
-    loadGames()
-      .then(setGames)
-      .catch(() => {
-        const cached = localStorage.getItem(CACHE_KEY);
-        setGames(cached ? JSON.parse(cached) as Game[] : []);
-      });
-
-    const online = () => setOffline(false);
-    const offline = () => setOffline(true);
+    loadGames().then(setGames);
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
     const routeChanged = () => setSelectedId(getGameIdFromUrl());
-    window.addEventListener("online", online);
-    window.addEventListener("offline", offline);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
     window.addEventListener("hashchange", routeChanged);
     return () => {
-      window.removeEventListener("online", online);
-      window.removeEventListener("offline", offline);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
       window.removeEventListener("hashchange", routeChanged);
     };
   }, []);
@@ -87,37 +90,24 @@ function App() {
     let cancelled = false;
     setDetailLoading(true);
     setDetailError(null);
+    setSelectedGame(games.find((game) => String(game.id) === String(selectedId)) ?? null);
 
-    const cachedGame = games.find((game) => String(game.id) === String(selectedId));
-    if (cachedGame) {
-      setSelectedGame(cachedGame);
+    loadGameById(selectedId).then((game) => {
+      if (cancelled) return;
+      setSelectedGame(game);
+      if (!game) setDetailError("No se encontró este juego en la base de datos pública.");
       setDetailLoading(false);
-      return;
-    }
-
-    loadGameById(selectedId)
-      .then((game) => {
-        if (cancelled) return;
-        setSelectedGame(game);
-        if (!game) setDetailError("Este juego no existe o ya no está disponible en el catálogo.");
-      })
-      .catch(() => {
-        if (!cancelled) setDetailError("No se pudo cargar la información del juego. Comprueba tu conexión e inténtalo de nuevo.");
-      })
-      .finally(() => {
-        if (!cancelled) setDetailLoading(false);
-      });
+    }).catch(() => {
+      if (cancelled) return;
+      setDetailError("No se pudo cargar la información del juego.");
+      setDetailLoading(false);
+    });
 
     return () => { cancelled = true; };
   }, [selectedId, games]);
 
-  const openGame = (id: string) => {
-    window.location.hash = `/game/${encodeURIComponent(id)}`;
-  };
-
-  const goHome = () => {
-    window.location.hash = "";
-  };
+  const openGame = (id: string) => { window.location.hash = `/game/${encodeURIComponent(id)}`; };
+  const goHome = () => { window.location.hash = ""; };
 
   if (selectedId) {
     return <GameDetail game={selectedGame} loading={detailLoading} error={detailError} onBack={goHome} />;
@@ -141,7 +131,7 @@ function App() {
   const activeFilters = Object.values(filters).filter(Boolean).length;
   return (
     <main className="app">
-      <div className="hero"><div className="brand">🎲 TerraLudo</div><h1>Catálogo de juegos</h1><p>Encuentra el juego perfecto para tu partida.</p>{offline && <div className="offline"><WifiOff size={15} /> Modo sin conexión · usando catálogo guardado</div>}</div>
+      <div className="hero"><div className="brand">🎲 TerraLudo</div><h1>Catálogo de juegos</h1><p>Encuentra el juego perfecto para tu partida.</p>{isOffline && <div className="offline"><WifiOff size={15} /> Modo sin conexión · usando catálogo guardado</div>}</div>
       <section className="search-area">
         <div className="search-row"><div className="search-box"><Search size={20} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar por nombre..." aria-label="Buscar juego por nombre" />{query && <button className="icon-button" onClick={() => setQuery("")} aria-label="Limpiar búsqueda"><X size={18} /></button>}</div><button className={"filter-button " + (showFilters || activeFilters ? "active" : "")} onClick={() => setShowFilters(!showFilters)}><SlidersHorizontal size={18} /> Filtros {activeFilters ? `(${activeFilters})` : ""}</button></div>
         {showFilters && <div className="filters"><label>Jugadores<select value={filters.players} onChange={(e) => setFilters({ ...filters, players: e.target.value })}><option value="">Cualquiera</option>{[1,2,3,4,5,6,7,8,10].map(n => <option key={n} value={n}>{n} jugadores</option>)}</select></label><label>Duración<select value={filters.duration} onChange={(e) => setFilters({ ...filters, duration: e.target.value })}><option value="">Cualquiera</option><option value="short">Hasta 30 min</option><option value="medium">31–90 min</option><option value="long">Más de 90 min</option></select></label><label>Dificultad<select value={filters.difficulty} onChange={(e) => setFilters({ ...filters, difficulty: e.target.value })}><option value="">Cualquiera</option><option value="casual">Casual</option><option value="medium">Medio</option><option value="hard">Difícil</option><option value="expert">Experto</option></select></label><label>Edad máxima<select value={filters.age} onChange={(e) => setFilters({ ...filters, age: e.target.value })}><option value="">Cualquiera</option>{[6,8,10,12,14,16,18].map(n => <option key={n} value={n}>{n}+ recomendado</option>)}</select></label>{activeFilters > 0 && <button className="clear" onClick={() => setFilters(emptyFilters)}>Limpiar filtros</button>}</div>}
@@ -157,10 +147,8 @@ function GameCard({ game, onOpen }: { game: Game; onOpen: (id: string) => void }
 }
 
 function GameDetail({ game, loading, error, onBack }: { game: Game | null; loading: boolean; error: string | null; onBack: () => void }) {
-  return <main className="detail-page"><div className="detail-shell">
-    <button type="button" className="back-button" onClick={onBack}><ArrowLeft size={18} /> Volver al catálogo</button>
-    {loading ? <div className="detail-card detail-message"><h1>Cargando juego…</h1><p>Estamos obteniendo la información actualizada del catálogo.</p></div> : error || !game ? <div className="detail-card detail-message"><h1>Juego no encontrado</h1><p>{error ?? "El juego solicitado no está disponible en el catálogo."}</p></div> : <article className="detail-card"><div className="detail-media"><ImageIcon size={54} /><span>Foto del juego</span><small>La imagen se añadirá aquí</small></div><div className="detail-content"><span className={`difficulty ${game.difficulty}`}>{({ casual: "Casual", medium: "Medio", hard: "Difícil", expert: "Experto" } as Record<string,string>)[game.difficulty] ?? game.difficulty}</span><h1>{game.name}</h1>{game.notes && <section><h2>Descripción</h2><p className="description">{game.notes}</p></section>}<section><h2>Información del juego</h2><div className="detail-grid">{game.min_players != null && game.max_players != null && <div><span>Jugadores</span><strong><Users size={17} /> {game.min_players}–{game.max_players}</strong></div>}{game.duration_minutes != null && <div><span>Duración</span><strong><Clock3 size={17} /> {game.duration_minutes} min</strong></div>}{game.min_age != null && <div><span>Edad mínima</span><strong>{game.min_age}+</strong></div>}<div><span>Dificultad</span><strong>{({ casual: "Casual", medium: "Medio", hard: "Difícil", expert: "Experto" } as Record<string,string>)[game.difficulty] ?? game.difficulty}</strong></div></div></section></div></article>}
-  </div></main>;
+  const difficulty = game ? (({ casual: "Casual", medium: "Medio", hard: "Difícil", expert: "Experto" } as Record<string,string>)[game.difficulty] ?? game.difficulty) : "";
+  return <main className="detail-page"><div className="detail-shell"><button type="button" className="back-button" onClick={onBack}><ArrowLeft size={18} /> Volver al catálogo</button>{loading && !game ? <div className="detail-card detail-message"><h1>Cargando juego…</h1><p>Estamos obteniendo la información desde el catálogo.</p></div> : error && !game ? <div className="detail-card detail-message"><h1>No se pudo cargar</h1><p>{error}</p><button type="button" className="back-button" onClick={onBack}>Volver al catálogo</button></div> : game ? <article className="detail-card"><div className="detail-media"><ImageIcon size={54} /><span>Foto del juego</span><small>La imagen se añadirá aquí</small></div><div className="detail-content"><span className={`difficulty ${game.difficulty}`}>{difficulty}</span><h1>{game.name}</h1>{game.notes && <section><h2>Descripción</h2><p className="description">{game.notes}</p></section>}<section><h2>Información del juego</h2><div className="detail-grid">{game.min_players != null && game.max_players != null && <div><span>Jugadores</span><strong><Users size={17} /> {game.min_players}–{game.max_players}</strong></div>}{game.duration_minutes != null && <div><span>Duración</span><strong><Clock3 size={17} /> {game.duration_minutes} min</strong></div>}{game.min_age != null && <div><span>Edad mínima</span><strong>{game.min_age}+</strong></div>}<div><span>Dificultad</span><strong>{difficulty}</strong></div></div></section></div></article> : null}</div></main>;
 }
 
 createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
