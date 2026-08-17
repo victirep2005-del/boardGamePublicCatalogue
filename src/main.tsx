@@ -20,16 +20,24 @@ const CACHE_KEY = "terraludo-public-games-v1";
 const emptyFilters: Filters = { players: "", duration: "", difficulty: "", age: "" };
 
 async function loadGames(): Promise<Game[]> {
-  try {
-    const { data, error } = await supabase.from("board_games").select("id,name,min_players,max_players,duration_minutes,min_age,difficulty,notes").order("name", { ascending: true });
-    if (error) throw error;
-    const games = (data ?? []) as Game[];
-    localStorage.setItem(CACHE_KEY, JSON.stringify(games));
-    return games;
-  } catch {
-    const cached = localStorage.getItem(CACHE_KEY);
-    return cached ? JSON.parse(cached) as Game[] : [];
-  }
+  const { data, error } = await supabase
+    .from("board_games")
+    .select("id,name,min_players,max_players,duration_minutes,min_age,difficulty,notes")
+    .order("name", { ascending: true });
+  if (error) throw error;
+  const games = (data ?? []) as Game[];
+  localStorage.setItem(CACHE_KEY, JSON.stringify(games));
+  return games;
+}
+
+async function loadGameById(id: string): Promise<Game | null> {
+  const { data, error } = await supabase
+    .from("board_games")
+    .select("id,name,min_players,max_players,duration_minutes,min_age,difficulty,notes")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw error;
+  return (data ?? null) as Game | null;
 }
 
 function getGameIdFromUrl() {
@@ -44,9 +52,18 @@ function App() {
   const [showFilters, setShowFilters] = useState(false);
   const [offline, setOffline] = useState(!navigator.onLine);
   const [selectedId, setSelectedId] = useState<string | null>(getGameIdFromUrl());
+  const [selectedGame, setSelectedGame] = useState<Game | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
 
   useEffect(() => {
-    loadGames().then(setGames);
+    loadGames()
+      .then(setGames)
+      .catch(() => {
+        const cached = localStorage.getItem(CACHE_KEY);
+        setGames(cached ? JSON.parse(cached) as Game[] : []);
+      });
+
     const online = () => setOffline(false);
     const offline = () => setOffline(true);
     const routeChanged = () => setSelectedId(getGameIdFromUrl());
@@ -60,11 +77,51 @@ function App() {
     };
   }, []);
 
-  const openGame = (id: string) => { window.location.hash = `/game/${encodeURIComponent(id)}`; };
-  const goHome = () => { window.location.hash = ""; };
-  const selectedGame = games.find((game) => game.id === selectedId) ?? null;
+  useEffect(() => {
+    if (!selectedId) {
+      setSelectedGame(null);
+      setDetailError(null);
+      return;
+    }
 
-  if (selectedId) return <GameDetail game={selectedGame} onBack={goHome} />;
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailError(null);
+
+    const cachedGame = games.find((game) => String(game.id) === String(selectedId));
+    if (cachedGame) {
+      setSelectedGame(cachedGame);
+      setDetailLoading(false);
+      return;
+    }
+
+    loadGameById(selectedId)
+      .then((game) => {
+        if (cancelled) return;
+        setSelectedGame(game);
+        if (!game) setDetailError("Este juego no existe o ya no está disponible en el catálogo.");
+      })
+      .catch(() => {
+        if (!cancelled) setDetailError("No se pudo cargar la información del juego. Comprueba tu conexión e inténtalo de nuevo.");
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedId, games]);
+
+  const openGame = (id: string) => {
+    window.location.hash = `/game/${encodeURIComponent(id)}`;
+  };
+
+  const goHome = () => {
+    window.location.hash = "";
+  };
+
+  if (selectedId) {
+    return <GameDetail game={selectedGame} loading={detailLoading} error={detailError} onBack={goHome} />;
+  }
 
   const filteredGames = useMemo(() => {
     const q = query.trim().toLocaleLowerCase();
@@ -96,13 +153,14 @@ function App() {
 
 function GameCard({ game, onOpen }: { game: Game; onOpen: (id: string) => void }) {
   const difficulty = ({ casual: "Casual", medium: "Medio", hard: "Difícil", expert: "Experto" } as Record<string,string>)[game.difficulty] ?? game.difficulty;
-  return <button className="card card-button" onClick={() => onOpen(game.id)} aria-label={`Ver detalles de ${game.name}`}><div className="card-title"><h2>{game.name}</h2><span className={`difficulty ${game.difficulty}`}>{difficulty}</span></div><div className="meta">{game.min_players != null && game.max_players != null && <span><Users size={16} /> {game.min_players}–{game.max_players}</span>}{game.duration_minutes != null && <span><Clock3 size={16} /> {game.duration_minutes} min</span>}{game.min_age != null && <span>Edad {game.min_age}+</span>}</div>{game.notes && <p>{game.notes}</p>}<span className="card-link">Ver detalles →</span></button>;
+  return <button type="button" className="card card-button" onClick={() => onOpen(game.id)} aria-label={`Ver detalles de ${game.name}`}><div className="card-title"><h2>{game.name}</h2><span className={`difficulty ${game.difficulty}`}>{difficulty}</span></div><div className="meta">{game.min_players != null && game.max_players != null && <span><Users size={16} /> {game.min_players}–{game.max_players}</span>}{game.duration_minutes != null && <span><Clock3 size={16} /> {game.duration_minutes} min</span>}{game.min_age != null && <span>Edad {game.min_age}+</span>}</div>{game.notes && <p>{game.notes}</p>}<span className="card-link">Ver detalles →</span></button>;
 }
 
-function GameDetail({ game, onBack }: { game: Game | null; onBack: () => void }) {
-  if (!game) return <main className="detail-page"><div className="detail-shell"><button className="back-button" onClick={onBack}><ArrowLeft size={18} /> Volver al catálogo</button><div className="detail-card"><h1>Juego no encontrado</h1><p>El juego solicitado no está disponible en el catálogo.</p></div></div></main>;
-  const difficulty = ({ casual: "Casual", medium: "Medio", hard: "Difícil", expert: "Experto" } as Record<string,string>)[game.difficulty] ?? game.difficulty;
-  return <main className="detail-page"><div className="detail-shell"><button className="back-button" onClick={onBack}><ArrowLeft size={18} /> Volver al catálogo</button><article className="detail-card"><div className="detail-media"><ImageIcon size={54} /><span>Foto del juego</span><small>La imagen se añadirá aquí</small></div><div className="detail-content"><span className={`difficulty ${game.difficulty}`}>{difficulty}</span><h1>{game.name}</h1>{game.notes && <section><h2>Descripción</h2><p className="description">{game.notes}</p></section>}<section><h2>Información del juego</h2><div className="detail-grid">{game.min_players != null && game.max_players != null && <div><span>Jugadores</span><strong><Users size={17} /> {game.min_players}–{game.max_players}</strong></div>}{game.duration_minutes != null && <div><span>Duración</span><strong><Clock3 size={17} /> {game.duration_minutes} min</strong></div>}{game.min_age != null && <div><span>Edad mínima</span><strong>{game.min_age}+</strong></div>}<div><span>Dificultad</span><strong>{difficulty}</strong></div></div></section></div></article></div></main>;
+function GameDetail({ game, loading, error, onBack }: { game: Game | null; loading: boolean; error: string | null; onBack: () => void }) {
+  return <main className="detail-page"><div className="detail-shell">
+    <button type="button" className="back-button" onClick={onBack}><ArrowLeft size={18} /> Volver al catálogo</button>
+    {loading ? <div className="detail-card detail-message"><h1>Cargando juego…</h1><p>Estamos obteniendo la información actualizada del catálogo.</p></div> : error || !game ? <div className="detail-card detail-message"><h1>Juego no encontrado</h1><p>{error ?? "El juego solicitado no está disponible en el catálogo."}</p></div> : <article className="detail-card"><div className="detail-media"><ImageIcon size={54} /><span>Foto del juego</span><small>La imagen se añadirá aquí</small></div><div className="detail-content"><span className={`difficulty ${game.difficulty}`}>{({ casual: "Casual", medium: "Medio", hard: "Difícil", expert: "Experto" } as Record<string,string>)[game.difficulty] ?? game.difficulty}</span><h1>{game.name}</h1>{game.notes && <section><h2>Descripción</h2><p className="description">{game.notes}</p></section>}<section><h2>Información del juego</h2><div className="detail-grid">{game.min_players != null && game.max_players != null && <div><span>Jugadores</span><strong><Users size={17} /> {game.min_players}–{game.max_players}</strong></div>}{game.duration_minutes != null && <div><span>Duración</span><strong><Clock3 size={17} /> {game.duration_minutes} min</strong></div>}{game.min_age != null && <div><span>Edad mínima</span><strong>{game.min_age}+</strong></div>}<div><span>Dificultad</span><strong>{({ casual: "Casual", medium: "Medio", hard: "Difícil", expert: "Experto" } as Record<string,string>)[game.difficulty] ?? game.difficulty}</strong></div></div></section></div></article>}
+  </div></main>;
 }
 
 createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
